@@ -1,8 +1,9 @@
 // app.js – 화면 동작 (목록 그리기, 일정 추가)
 
-let baseTasks = [];   // data/tasks.json에서 읽은 기본 일정
-let addedTasks = [];  // 화면에서 추가해 브라우저에 저장한 일정
 let tasksLoading = true;
+let tasksReady = false;
+let taskSaving = false;
+let taskClient = null;
 let tasks = [];
 let weatherByRegion = {};
 const currentWeatherByRegion = {};
@@ -75,36 +76,59 @@ function isTaskList(value) {
 async function loadTasks() {
   const msgBox = document.getElementById('msgBox');
   const submitButton = document.querySelector('#taskForm button');
-  const notices = [];
   tasksLoading = true;
+  tasksReady = false;
   submitButton.disabled = true;
+  document.getElementById('saveMarkdownButton').disabled = true;
   msgBox.textContent = '일정 목록을 불러오는 중…';
   try {
-    const response = await fetch('data/tasks.json');
-    if (!response.ok) throw new Error('일정 파일 요청 실패');
-    const data = await response.json();
-    if (!isTaskList(data)) throw new Error('일정 파일 형식 오류');
-    baseTasks = data;
+    if (!taskClient) taskClient = createTaskClient();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    let result;
+    try {
+      result = await taskClient.from('wx_tasks').select('id,title,region,kind,owner')
+        .order('id', { ascending: true }).abortSignal(controller.signal);
+    } finally {
+      clearTimeout(timeout);
+    }
+    const { data, error } = result;
+    if (error) throw new Error('일정을 읽지 못했습니다. 연결 정보와 setup.sql 실행 여부를 확인하고 새로고침해 주세요.');
+    if (!isTaskList(data)) throw new Error('DB 일정 응답 형식이 올바르지 않습니다.');
+    tasks = data;
+    tasksReady = true;
+    msgBox.textContent = '공유 일정 ' + tasks.length + '건을 불러왔습니다.';
   } catch (error) {
-    baseTasks = [];
-    notices.push(window.location.protocol === 'file:'
-      ? '배포 주소로 열어 주세요'
-      : '기본 일정 파일을 읽지 못했습니다. 연결과 data/tasks.json 파일을 확인하고 새로고침해 주세요.');
+    msgBox.textContent = error.message || '일정을 읽지 못했습니다. 연결을 확인하고 새로고침해 주세요.';
+  } finally {
+    renderTasks();
+    tasksLoading = false;
+    submitButton.disabled = !tasksReady;
+    document.getElementById('saveMarkdownButton').disabled = !tasksReady && tasks.length === 0;
   }
-  // JSON 요청을 마친 뒤 브라우저의 추가 일정만 읽어 뒤에 붙임
-  try {
-    const saved = JSON.parse(localStorage.getItem('wx_added') || '[]');
-    if (!isTaskList(saved)) throw new Error('저장된 일정 형식 오류');
-    addedTasks = saved;
-  } catch (error) {
-    addedTasks = [];
-    notices.push('브라우저에 저장된 추가 일정을 읽지 못했습니다.');
+}
+
+function createTaskClient() {
+  if (typeof SUPABASE_URL !== 'string' || !SUPABASE_URL ||
+      typeof SUPABASE_PUBLIC_KEY !== 'string' || !SUPABASE_PUBLIC_KEY) {
+    throw new Error('config.js에 Supabase 주소와 공개용 키를 입력해 주세요.');
   }
-  tasks = baseTasks.concat(addedTasks);
-  renderTasks();
-  tasksLoading = false;
-  submitButton.disabled = false;
-  msgBox.textContent = notices.join(' ');
+  let publicKey = /^sb_publishable_[A-Za-z0-9_-]+$/.test(SUPABASE_PUBLIC_KEY);
+  if (!publicKey) {
+    try {
+      const payload = SUPABASE_PUBLIC_KEY.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      publicKey = JSON.parse(atob(payload)).role === 'anon';
+    } catch (error) {
+      publicKey = false;
+    }
+  }
+  if (!publicKey) throw new Error('공개용 publishable 또는 anon 키만 사용해 주세요. 비밀 키는 사용할 수 없습니다.');
+  if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+    throw new Error('supabase-js를 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요.');
+  }
+  return window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLIC_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
 }
 
 function weatherText(w) {
@@ -131,9 +155,9 @@ function renderTasks() {
   }
 }
 
-function addTask(e) {
+async function addTask(e) {
   e.preventDefault();
-  if (tasksLoading) return;
+  if (tasksLoading || taskSaving || !tasksReady) return;
   const t = {
     title: document.getElementById('titleInput').value.trim(),
     region: document.getElementById('regionInput').value,
@@ -141,17 +165,45 @@ function addTask(e) {
     owner: document.getElementById('ownerInput').value.trim(),
   };
   if (!t.title || !t.owner) return;
-  const saved = addedTasks.concat(t);
+  if (!isTaskList([t])) return;
+  const msgBox = document.getElementById('msgBox');
+  const submitButton = document.querySelector('#taskForm button');
+  taskSaving = true;
+  submitButton.disabled = true;
+  msgBox.textContent = '공유 일정을 저장하는 중…';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
-    localStorage.setItem('wx_added', JSON.stringify(saved));
+    const { data, error } = await taskClient.from('wx_tasks').insert(t)
+      .select('id,title,region,kind,owner').single().abortSignal(controller.signal);
+    if (error || !data || !isTaskList([data])) throw new Error('일정 저장 실패');
+    tasks.push(data);
+    e.target.reset();
+    renderTasks();
+    msgBox.textContent = '공유 일정에 저장했습니다. 다른 브라우저에서는 새로고침해 확인하세요.';
   } catch (error) {
-    document.getElementById('msgBox').textContent = '추가 일정을 브라우저에 저장하지 못했습니다.';
-    return;
+    msgBox.textContent = '저장 결과를 확인하지 못했습니다. 입력은 유지됩니다. 다시 추가하기 전에 새로고침해 중복 여부를 확인하세요.';
+  } finally {
+    clearTimeout(timeout);
+    taskSaving = false;
+    submitButton.disabled = !tasksReady;
   }
-  addedTasks = saved;
-  tasks = baseTasks.concat(addedTasks);
-  e.target.reset();
-  renderTasks();
+}
+
+function saveJudgmentMarkdown() {
+  const rows = Array.from(document.querySelectorAll('#taskList tr'), row =>
+    Array.from(row.cells, cell => cell.textContent));
+  const date = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  const markdown = buildJudgmentMarkdown(rows, date);
+  const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = '현장일정_판단_' + date + '.md';
+  link.hidden = true;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 const today = new Date();
@@ -165,6 +217,7 @@ todayDate.textContent = todayText;
 todayDate.dateTime = todayText;
 
 document.getElementById('taskForm').addEventListener('submit', addTask);
+document.getElementById('saveMarkdownButton').addEventListener('click', saveJudgmentMarkdown);
 loadTasks();
 renderTasks();
 loadWeather();
