@@ -15,6 +15,7 @@ function buildWeatherUrl(region) {
     latitude: location.latitude,
     longitude: location.longitude,
     daily: 'temperature_2m_max,wind_speed_10m_max,precipitation_probability_max',
+    current: 'temperature_2m,wind_speed_10m',
     timezone: 'Asia/Seoul',
     forecast_days: '1',
     temperature_unit: 'celsius',
@@ -41,6 +42,17 @@ function parseWeather(data) {
   return weather;
 }
 
+function parseCurrentWeather(data) {
+  const current = data && data.current;
+  if (!current || !Number.isFinite(current.temperature_2m) ||
+      !Number.isFinite(current.wind_speed_10m) || current.wind_speed_10m < 0 ||
+      typeof current.time !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(current.time)) {
+    throw new Error('현재 날씨 응답에 필요한 값이 없음');
+  }
+  return { temperature: current.temperature_2m, wind: current.wind_speed_10m, time: current.time };
+}
+
 // 교육용 가상 기준 (실제 작업 중지 · 행사 취소 기준은 각 기관 규정을 따름)
 const RULES = { wind: 10, rain: 60, heat: 33 };
 
@@ -54,4 +66,4 @@ function judge(kind, w) {
   return { level: 'ok', text: '진행' };
 }
 
-if (typeof module !== 'undefined') module.exports = { REGIONS, RULES, buildWeatherUrl, parseWeather, judge };
+if (typeof module !== 'undefined') module.exports = { REGIONS, RULES, buildWeatherUrl, parseWeather, parseCurrentWeather, judge };

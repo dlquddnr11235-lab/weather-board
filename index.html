@@ -14,8 +14,11 @@
   </header>
 
   <section class="card">
+    <h2>지역별 현재 날씨</h2>
     <p id="weatherBox" role="status">오늘 날씨를 불러오는 중…</p>
-    <p>날씨: 최고 기온(℃) · 최대 풍속(m/s) · 최대 강수확률(%)</p>
+    <ul id="currentWeatherList" aria-live="polite"></ul>
+    <p>현재 기온(℃) · 풍속(m/s) · 기준 시각 · 수신 시각 (한국 시간)</p>
+    <p>일정 표는 오늘 최고 기온 · 최대 풍속 · 최대 강수확률로 판단합니다.</p>
     <p>날씨 제공: <a href="https://open-meteo.com/">Open-Meteo</a></p>
   </section>
 
