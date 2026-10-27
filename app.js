@@ -131,8 +131,12 @@ function createTaskClient() {
   });
 }
 
-function weatherText(w) {
-  return w ? w.tempMax + '℃ · ' + w.windMax + 'm/s · ' + w.rainProb + '%' : '-';
+function weatherText(region) {
+  const current = currentWeatherByRegion[region];
+  if (!current) return weatherFailures.has(region) ? '날씨 수신 실패' : '날씨 확인 전';
+  return current.temperature + '℃ · ' + current.wind + 'm/s' +
+    ' · 기준 ' + current.time.replace('T', ' ') +
+    (weatherFailures.has(region) ? ' · 갱신 실패 (이전 값)' : '');
 }
 
 function renderTasks() {
@@ -142,7 +146,7 @@ function renderTasks() {
     const w = weatherByRegion[t.region];
     const r = judge(t.kind, w);
     const tr = document.createElement('tr');
-    for (const v of [t.title, t.region, t.kind, t.owner, weatherText(w)]) {
+    for (const v of [t.title, t.region, t.kind, t.owner, weatherText(t.region)]) {
       const td = document.createElement('td');
       td.textContent = v;
       tr.appendChild(td);
